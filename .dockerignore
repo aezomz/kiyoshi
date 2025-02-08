@@ -1,0 +1,8 @@
+.github
+**/.git
+**/target
+Dockerfile
+justfile
+LICENSE
+README.md
+release.toml

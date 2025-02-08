@@ -1,0 +1,21 @@
+database:
+  host: "${DB_HOST:localhost}"
+  port: "${DB_PORT:3306}"
+  username: "${DB_USER:root}"
+  password: "${DB_PASSWORD}"
+  database: "${DB_NAME:test}"
+
+cleanup_tasks:
+  - name: "cleanup_old_records"
+    description: "Clean up records older than the specified interval"
+    enabled: true
+    template: |
+      DELETE FROM {{ table_name }}
+      WHERE created_at < '{{ data_interval_end }}'
+      AND created_at >= '{{ data_interval_start }}'
+      LIMIT 1000;
+    parameters:
+      table_name: "example_table"
+    batch_size: 1000
+    retry_attempts: 3
+    retry_delay_seconds: 5 
