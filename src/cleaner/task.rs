@@ -1,11 +1,18 @@
 use anyhow::Result;
-use chrono::Utc;
 use log::{info, warn};
+use serde_json;
+use slack_api_client::{CreateMessage, SlackClient};
 use tokio::time::Duration;
 
-use crate::cleaner::{config::Config, db::Database, template::TemplateEngine};
+use crate::{
+    cleaner::{config::Config, db::Database, template::TemplateEngine},
+    scheduler::job::JobScheduleMetadata,
+};
 
-pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> {
+pub async fn process_cleanup_tasks(
+    metadata: JobScheduleMetadata,
+    config: Config,
+) -> Result<(), anyhow::Error> {
     // Initialize components
     let db = match Database::new(&config.database_config).await {
         Ok(db) => db,
@@ -19,11 +26,17 @@ pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> 
     let template_engine = TemplateEngine::new();
 
     // Calculate intervals
-    let end_time = Utc::now();
-    let prev_run = template_engine.get_previous_schedule(&config.cron_schedule, end_time)?;
-    let interval_end = end_time.format("%Y-%m-%d %H:%M:%S").to_string();
-    let interval_start = prev_run.format("%Y-%m-%d %H:%M:%S").to_string();
+    let data_interval_end = metadata
+        .data_interval_end
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    info!("data_interval_end: {}", data_interval_end);
 
+    let slack_client = if config.slack_config.enabled {
+        Some(SlackClient::new(config.slack_config.bot_token))
+    } else {
+        None
+    };
     // Process each cleanup task
     for task in config.cleanup_tasks {
         if !task.enabled {
@@ -34,19 +47,15 @@ pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> 
         info!("Processing cleanup task: {}", task.name);
 
         // Render SQL template
-        let sql = template_engine.render(
-            &task.template_query,
-            &task.parameters,
-            &interval_start,
-            &interval_end,
-        )?;
+        let sql =
+            template_engine.render(&task.template_query, &task.parameters, &data_interval_end)?;
 
         info!("Executing cleanup query for task: {}", task.name);
 
         // Execute with retries
         let mut attempt = 0;
         let mut success = false;
-        let mut total_rows = 0;
+        let mut total_rows: u64 = 0;
 
         'outer: while attempt < task.retry_attempts {
             loop {
@@ -59,11 +68,33 @@ pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> 
                                 total_rows, task.name, elapsed_in_secs
                             );
                             success = true;
+                            let report = create_cleanup_report(CleanupMetadata {
+                                total_rows,
+                                elapsed_time: elapsed_in_secs,
+                                schema_name: task
+                                    .parameters
+                                    .get("schema_name")
+                                    .or(Some(&config.database_config.database)),
+                                table_name: task.parameters.get("table_name"),
+                            });
+                            if let Some(slack_client) = &slack_client {
+                                let send_result = report
+                                    .send_to_channel(
+                                        slack_client,
+                                        config.slack_config.channel_id.clone(),
+                                    )
+                                    .await;
+                                if let Err(e) = send_result {
+                                    warn!("Failed to send cleanup report to Slack: {}", e);
+                                } else {
+                                    info!("Cleanup report sent to Slack");
+                                }
+                            }
                             break 'outer;
                         }
                         total_rows += affected_rows;
                         info!(
-                            "Successfully cleaned up {} rowss (total: {}) for task: {} in {:.2}s",
+                            "Successfully cleaned up {} rows (total: {}) for task: {} in {:.2}s",
                             affected_rows, total_rows, task.name, elapsed_in_secs
                         );
                         tokio::time::sleep(Duration::from_secs(task.query_interval_seconds.into()))
@@ -80,6 +111,25 @@ pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> 
                                 task.retry_delay_seconds.into(),
                             ))
                             .await;
+                        }
+                        if attempt == task.retry_attempts {
+                            let error_report = create_error_report(&format!(
+                                "All attempts failed for task: {}, error: {}",
+                                task.name, e
+                            ));
+                            if let Some(slack_client) = &slack_client {
+                                let send_result = error_report
+                                    .send_to_channel(
+                                        slack_client,
+                                        config.slack_config.channel_id.clone(),
+                                    )
+                                    .await;
+                                if let Err(e) = send_result {
+                                    warn!("Failed to send error report to Slack: {}", e);
+                                } else {
+                                    info!("Error report sent to Slack");
+                                }
+                            }
                         }
                         break; // Break inner loop to retry with attempt counter
                     }
@@ -98,4 +148,80 @@ pub async fn process_cleanup_tasks(config: Config) -> Result<(), anyhow::Error> 
 
     info!("Cleanup process completed");
     Ok(())
+}
+
+struct CleanupMetadata<'a> {
+    total_rows: u64,
+    elapsed_time: f64,
+    schema_name: Option<&'a String>,
+    table_name: Option<&'a String>,
+}
+
+fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
+    let schema_table_name = match (metadata.schema_name, metadata.table_name) {
+        (Some(schema), Some(table)) => format!("{}.{}", schema, table),
+        _ => String::new(),
+    };
+    CreateMessage::Blocks(serde_json::json!([
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": format!("🧹 Cleanup Task Report for {}", schema_table_name),
+                "emoji": true
+            }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": format!("*Total Rows Cleaned:*\n{}", metadata.total_rows)
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": format!("*Total Time Elapsed:*\n{:.2}s", metadata.elapsed_time)
+                }
+            ]
+        }
+        ,
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": format!("Executed at: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
+                }
+            ]
+        }
+    ]))
+}
+
+fn create_error_report(error: &str) -> CreateMessage {
+    CreateMessage::Blocks(serde_json::json!([
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "❌ Cleanup Task Error",
+                "emoji": true
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": format!("*Error Details:*\n```{}```", error)
+            }
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": format!("Error occurred at: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
+                }
+            ]
+        }
+    ]))
 }

@@ -3,26 +3,55 @@ use std::{future::Future, pin::Pin, str::FromStr, time::Duration};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 
+type JobFunction =
+    (dyn FnMut(JobScheduleMetadata) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync);
+
 pub struct Job {
     name: String,
     schedule: Schedule,
-    function: Box<(dyn FnMut() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync)>,
-
+    function: Box<JobFunction>,
     last_run: Option<DateTime<Utc>>,
+    schedule_metadata: JobScheduleMetadata,
+}
+
+pub struct JobScheduleMetadata {
+    pub data_interval_end: DateTime<Utc>,
+}
+
+impl JobScheduleMetadata {
+    pub fn new(data_interval_end: DateTime<Utc>) -> Self {
+        Self { data_interval_end }
+    }
+
+    pub fn update(&mut self, data_interval_end: DateTime<Utc>) {
+        self.data_interval_end = data_interval_end;
+    }
 }
 
 impl Job {
     pub fn new<T, S>(name: S, schedule: &str, function: T) -> Result<Self, cron::error::Error>
     where
         S: Into<String>,
-        T: FnMut() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static,
+        T: FnMut(JobScheduleMetadata) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            + Send
+            + Sync
+            + 'static,
     {
+        let schedule = Schedule::from_str(schedule)?;
+        let now = Utc::now();
+        let next = Self::get_next_schedule(&schedule, now);
+
         Ok(Self {
             name: name.into(),
-            schedule: Schedule::from_str(schedule)?,
+            schedule,
             function: Box::new(function),
             last_run: None,
+            schedule_metadata: JobScheduleMetadata::new(next),
         })
+    }
+
+    pub fn get_next_schedule(schedule: &Schedule, now: DateTime<Utc>) -> DateTime<Utc> {
+        schedule.after(&now).next().unwrap_or(now)
     }
 
     #[must_use]
@@ -42,11 +71,27 @@ impl Job {
     }
 
     pub async fn run(&mut self) {
-        println!("{:?} firing: `{}`", Utc::now(), self.name);
-        self.last_run = Some(Utc::now());
-        let fut = (self.function)();
+        let now = Utc::now();
+        let next =
+            Self::get_next_schedule(&self.schedule, self.schedule_metadata.data_interval_end);
+
+        let metadata = JobScheduleMetadata {
+            data_interval_end: next,
+        };
+
+        println!("{:?} firing: `{}`", now, self.name);
+        self.last_run = Some(now);
+
+        // Update the stored metadata for next run
+        self.schedule_metadata.update(next);
+
+        let fut = (self.function)(metadata);
         tokio::spawn(async move {
             fut.await;
         });
+    }
+    #[allow(dead_code)]
+    pub fn get_schedule_metadata(&self) -> &JobScheduleMetadata {
+        &self.schedule_metadata
     }
 }

@@ -19,14 +19,9 @@ impl TemplateEngine {
         &self,
         template: &str,
         params: &HashMap<String, String>,
-        data_interval_start: &str,
         data_interval_end: &str,
     ) -> Result<String> {
         let mut context = params.clone();
-        context.insert(
-            "data_interval_start".to_string(),
-            data_interval_start.to_string(),
-        );
         context.insert(
             "data_interval_end".to_string(),
             data_interval_end.to_string(),
@@ -36,6 +31,8 @@ impl TemplateEngine {
         let rendered = tmpl.render(context)?;
         Ok(rendered)
     }
+
+    #[allow(dead_code)]
     pub fn get_previous_schedule(
         &self,
         schedule: &str,
@@ -72,13 +69,10 @@ mod tests {
         params.insert("name".to_string(), "test".to_string());
         params.insert("value".to_string(), "123".to_string());
 
-        let template = "Hello {{ name }}! Value is {{ value }}. Start: {{ data_interval_start }}, End: {{ data_interval_end }}";
-        let result = engine.render(template, &params, "2024-01-01", "2024-01-02")?;
+        let template = "Hello {{ name }}! Value is {{ value }}. End: {{ data_interval_end }}";
+        let result = engine.render(template, &params, "2024-01-02")?;
 
-        assert_eq!(
-            result,
-            "Hello test! Value is 123. Start: 2024-01-01, End: 2024-01-02"
-        );
+        assert_eq!(result, "Hello test! Value is 123. End: 2024-01-02");
         Ok(())
     }
 
@@ -86,10 +80,10 @@ mod tests {
     fn test_template_render_empty_params() -> Result<()> {
         let engine = TemplateEngine::new();
         let params = HashMap::new();
-        let template = "Start: {{ data_interval_start }}, End: {{ data_interval_end }}";
-        let result = engine.render(template, &params, "2024-01-01", "2024-01-02")?;
+        let template = "End: {{ data_interval_end }}";
+        let result = engine.render(template, &params, "2024-01-02")?;
 
-        assert_eq!(result, "Start: 2024-01-01, End: 2024-01-02");
+        assert_eq!(result, "End: 2024-01-02");
         Ok(())
     }
 
@@ -98,7 +92,7 @@ mod tests {
         let engine = TemplateEngine::new();
         let params = HashMap::new();
         let template = "Hello {{ invalid syntax";
-        let result = engine.render(template, &params, "2024-01-01", "2024-01-02");
+        let result = engine.render(template, &params, "2024-01-02");
 
         assert!(result.is_err());
     }

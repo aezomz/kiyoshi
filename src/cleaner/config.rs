@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub database_config: DatabaseConfig,
+    pub slack_config: SlackConfig,
     pub cleanup_tasks: Vec<CleanupTask>,
     pub cron_schedule: String,
 }
@@ -17,6 +18,18 @@ pub struct DatabaseConfig {
     pub username: String,
     pub password: String,
     pub database: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SlackConfig {
+    pub bot_token: String,
+    pub channel_id: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
