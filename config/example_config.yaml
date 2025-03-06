@@ -1,0 +1,33 @@
+config:
+  database_config:
+    host: ${DB_HOST:-localhost}
+    port: ${DB_PORT:-3310}
+    username: db_admin
+    password: "${DB_PASSWORD}"
+    database: "my_db"
+
+  slack_config:
+    bot_token: "${SLACK_BOT_TOKEN}"
+    channel_id: "alert_channel_ids"
+    enabled: true
+
+  safe_mode:
+    enabled: true
+    retention_days: 30
+
+cleanup_tasks:
+  - name: "cleanup_old_records"
+    description: "Clean up records older than the specified interval"
+    cron_schedule: "*/10 * * * * *"    
+    enabled: true
+    template_query: |
+      DELETE FROM {{ table_name }}
+      WHERE created_at < DATE_SUB('{{ data_interval_end }}', INTERVAL 1 MONTH)
+      LIMIT 1;
+    parameters:
+      table_name: "validation_runs"
+    batch_size: 1000
+    retry_attempts: 3
+    retry_delay_seconds: 5 
+    query_interval_seconds: 10
+    

@@ -5,13 +5,19 @@ use slack_api_client::{CreateMessage, SlackClient};
 use tokio::time::Duration;
 
 use crate::{
-    cleaner::{config::Config, db::Database, template::TemplateEngine},
+    cleaner::{
+        config::{CleanupTask, Config},
+        db::Database,
+        sql_validate::SqlValidator,
+        template::TemplateEngine,
+    },
     scheduler::job::JobScheduleMetadata,
 };
 
 pub async fn process_cleanup_tasks(
-    metadata: JobScheduleMetadata,
-    config: Config,
+    metadata: &JobScheduleMetadata,
+    config: &Config,
+    task: &CleanupTask,
 ) -> Result<(), anyhow::Error> {
     // Initialize components
     let db = match Database::new(&config.database_config).await {
@@ -33,117 +39,120 @@ pub async fn process_cleanup_tasks(
     info!("data_interval_end: {}", data_interval_end);
 
     let slack_client = if config.slack_config.enabled {
-        Some(SlackClient::new(config.slack_config.bot_token))
+        Some(SlackClient::new(config.slack_config.bot_token.clone()))
     } else {
         None
     };
-    // Process each cleanup task
-    for task in config.cleanup_tasks {
-        if !task.enabled {
-            info!("Skipping disabled task: {}", task.name);
-            continue;
-        }
 
-        info!("Processing cleanup task: {}", task.name);
+    if !task.enabled {
+        info!("Skipping disabled task: {}", task.name);
+        return Ok(());
+    }
 
-        // Render SQL template
-        let sql =
-            template_engine.render(&task.template_query, &task.parameters, &data_interval_end)?;
+    info!("Processing cleanup task: {}", task.name);
 
-        info!("Executing cleanup query for task: {}", task.name);
+    // Render SQL template
+    let sql = template_engine.render(&task.template_query, &task.parameters, &data_interval_end)?;
 
-        // Execute with retries
-        let mut attempt = 0;
-        let mut success = false;
-        let mut total_rows: u64 = 0;
+    // Validate SQL query
+    if config.safe_mode.enabled {
+        let validator = SqlValidator::new(config);
+        validator
+            .validate_sql_query(&sql)
+            .map_err(|e| anyhow::anyhow!("SQL validation failed for task {}: {}", task.name, e))?;
+    }
 
-        'outer: while attempt < task.retry_attempts {
-            loop {
-                info!("Executing sql query: \n{}", sql);
-                match db.execute_query(&sql).await {
-                    Ok((affected_rows, elapsed_in_secs)) => {
-                        if affected_rows == 0 {
-                            info!(
+    info!("Executing cleanup query for task: {}", task.name);
+
+    // Execute with retries
+    let mut attempt = 0;
+    let mut success = false;
+    let mut total_rows: u64 = 0;
+
+    'outer: while attempt < task.retry_attempts {
+        loop {
+            info!("Executing sql query: \n{}", sql);
+            match db.execute_query(&sql).await {
+                Ok((affected_rows, elapsed_in_secs)) => {
+                    if affected_rows == 0 {
+                        info!(
                                 "No more rows to clean up. Total rows cleaned: {} for task: {} in {:.2}s",
                                 total_rows, task.name, elapsed_in_secs
                             );
-                            success = true;
-                            let report = create_cleanup_report(CleanupMetadata {
-                                total_rows,
-                                elapsed_time: elapsed_in_secs,
-                                schema_name: task
-                                    .parameters
-                                    .get("schema_name")
-                                    .or(Some(&config.database_config.database)),
-                                table_name: task.parameters.get("table_name"),
-                            });
-                            if let Some(slack_client) = &slack_client {
-                                let send_result = report
-                                    .send_to_channel(
-                                        slack_client,
-                                        config.slack_config.channel_id.clone(),
-                                    )
-                                    .await;
-                                if let Err(e) = send_result {
-                                    warn!("Failed to send cleanup report to Slack: {}", e);
-                                } else {
-                                    info!("Cleanup report sent to Slack");
-                                }
-                            }
-                            break 'outer;
-                        }
-                        total_rows += affected_rows;
-                        info!(
-                            "Successfully cleaned up {} rows (total: {}) for task: {} in {:.2}s",
-                            affected_rows, total_rows, task.name, elapsed_in_secs
-                        );
-                        tokio::time::sleep(Duration::from_secs(task.query_interval_seconds.into()))
-                            .await;
-                    }
-                    Err(e) => {
-                        attempt += 1;
-                        warn!(
-                            "Attempt {}/{} failed for task {}: {}",
-                            attempt, task.retry_attempts, task.name, e
-                        );
-                        if attempt < task.retry_attempts {
-                            tokio::time::sleep(Duration::from_secs(
-                                task.retry_delay_seconds.into(),
-                            ))
-                            .await;
-                        }
-                        if attempt == task.retry_attempts {
-                            let error_report = create_error_report(&format!(
-                                "All attempts failed for task: {}, error: {}",
-                                task.name, e
-                            ));
-                            if let Some(slack_client) = &slack_client {
-                                let send_result = error_report
-                                    .send_to_channel(
-                                        slack_client,
-                                        config.slack_config.channel_id.clone(),
-                                    )
-                                    .await;
-                                if let Err(e) = send_result {
-                                    warn!("Failed to send error report to Slack: {}", e);
-                                } else {
-                                    info!("Error report sent to Slack");
-                                }
+                        success = true;
+                        let report = create_cleanup_report(CleanupMetadata {
+                            total_rows,
+                            elapsed_time: elapsed_in_secs,
+                            schema_name: task
+                                .parameters
+                                .get("schema_name")
+                                .or(Some(&config.database_config.database)),
+                            table_name: task.parameters.get("table_name"),
+                        });
+                        if let Some(slack_client) = &slack_client {
+                            let send_result = report
+                                .send_to_channel(
+                                    slack_client,
+                                    config.slack_config.channel_id.clone(),
+                                )
+                                .await;
+                            if let Err(e) = send_result {
+                                warn!("Failed to send cleanup report to Slack: {}", e);
+                            } else {
+                                info!("Cleanup report sent to Slack");
                             }
                         }
-                        break; // Break inner loop to retry with attempt counter
+                        break 'outer;
                     }
+                    total_rows += affected_rows;
+                    info!(
+                        "Successfully cleaned up {} rows (total: {}) for task: {} in {:.2}s",
+                        affected_rows, total_rows, task.name, elapsed_in_secs
+                    );
+                    tokio::time::sleep(Duration::from_secs(task.query_interval_seconds.into()))
+                        .await;
+                }
+                Err(e) => {
+                    attempt += 1;
+                    warn!(
+                        "Attempt {}/{} failed for task {}: {}",
+                        attempt, task.retry_attempts, task.name, e
+                    );
+                    if attempt < task.retry_attempts {
+                        tokio::time::sleep(Duration::from_secs(task.retry_delay_seconds.into()))
+                            .await;
+                    }
+                    if attempt == task.retry_attempts {
+                        let error_report = create_error_report(&format!(
+                            "All attempts failed for task: {}, error: {}",
+                            task.name, e
+                        ));
+                        if let Some(slack_client) = &slack_client {
+                            let send_result = error_report
+                                .send_to_channel(
+                                    slack_client,
+                                    config.slack_config.channel_id.clone(),
+                                )
+                                .await;
+                            if let Err(e) = send_result {
+                                warn!("Failed to send error report to Slack: {}", e);
+                            } else {
+                                info!("Error report sent to Slack");
+                            }
+                        }
+                    }
+                    break; // Break inner loop to retry with attempt counter
                 }
             }
         }
+    }
 
-        if !success {
-            warn!("All attempts failed for task: {}", task.name);
-            return Err(anyhow::anyhow!(
-                "All attempts failed for task: {}",
-                task.name
-            ));
-        }
+    if !success {
+        warn!("All attempts failed for task: {}", task.name);
+        return Err(anyhow::anyhow!(
+            "All attempts failed for task: {}",
+            task.name
+        ));
     }
 
     info!("Cleanup process completed");

@@ -69,33 +69,38 @@ async fn main() -> Result<()> {
 
     // TODO: load from directory so we can run multiple config files
     // Load configuration from specified path
-    let config = cleaner::config::Config::load_from_path(&cli.config_file)?;
+    let config = cleaner::config::FullConfig::load_from_path(&cli.config_file)?;
     info!("Configuration loaded successfully from {}", cli.config_file);
 
     let mut scheduler = Scheduler::default();
-    let configs = vec![config];
-    for config in configs {
-        let config_clone = config.clone();
-        scheduler.add(
-            Job::new("cleanup_task", &config.cron_schedule, move |metadata| {
-                let config = config_clone.clone();
-                Box::pin(async move {
-                    if let Err(e) = task::process_cleanup_tasks(metadata, config).await {
-                        warn!("Error running cleanup tasks: {}", e);
-                    }
+    let full_configs = vec![config];
+    for full_config in full_configs {
+        for task in full_config.cleanup_tasks {
+            let config_clone = full_config.config.clone();
+            let task_clone = task.clone();
+            scheduler.add(
+                Job::new("cleanup_task", &task.cron_schedule, move |metadata| {
+                    let config = config_clone.clone();
+                    let task = task_clone.clone();
+                    Box::pin(async move {
+                        if let Err(e) = task::process_cleanup_tasks(&metadata, &config, &task).await
+                        {
+                            warn!("Error running cleanup tasks: {}", e);
+                        }
+                    })
                 })
-            })
-            .unwrap(),
-        );
+                .unwrap(),
+            );
+        }
     }
-    scheduler.add(
-        Job::new("every 2", "*/2 * * * * *", move |_| {
-            Box::pin(async {
-                println!("{:?} - Every 2 seconds", Utc::now());
-            })
-        })
-        .unwrap(),
-    );
+    // scheduler.add(
+    //     Job::new("every 2", "*/2 * * * * *", move |_| {
+    //         Box::pin(async {
+    //             println!("{:?} - Every 2 seconds", Utc::now());
+    //         })
+    //     })
+    //     .unwrap(),
+    // );
 
     // Start the scheduler in the background
     let scheduler_handle = tokio::spawn(async move {

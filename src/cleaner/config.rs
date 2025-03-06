@@ -4,11 +4,39 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct FullConfig {
+    pub config: Config,
+    pub cleanup_tasks: Vec<CleanupTask>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub database_config: DatabaseConfig,
     pub slack_config: SlackConfig,
-    pub cleanup_tasks: Vec<CleanupTask>,
-    pub cron_schedule: String,
+    pub safe_mode: SafeMode,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            database_config: DatabaseConfig {
+                host: String::from("localhost"),
+                port: 3306,
+                username: String::from("root"),
+                password: String::from("123"),
+                database: String::from("my_database"),
+            },
+            slack_config: SlackConfig {
+                bot_token: String::from("xoxb-1234567890"),
+                channel_id: String::from("C01234567890"),
+                enabled: true,
+            },
+            safe_mode: SafeMode {
+                enabled: true,
+                retention_days: 30,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -37,6 +65,7 @@ pub struct CleanupTask {
     pub name: String,
     #[allow(dead_code)]
     pub description: String,
+    pub cron_schedule: String,
     pub enabled: bool,
     pub template_query: String,
     pub parameters: HashMap<String, String>,
@@ -47,13 +76,21 @@ pub struct CleanupTask {
     pub query_interval_seconds: u32,
 }
 
-impl Config {
+#[derive(Debug, Deserialize, Clone)]
+pub struct SafeMode {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub retention_days: u64,
+}
+
+impl FullConfig {
     pub fn load_from_path(path: &str) -> Result<Self> {
         let config_str = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path))?;
 
         let config_str = substitute_env_vars(&config_str);
-        let mut config: Config = serde_yaml::from_str(&config_str)
+        let mut config: FullConfig = serde_yaml::from_str(&config_str)
             .with_context(|| "Failed to parse YAML configuration")?;
 
         // Validate configuration
@@ -65,13 +102,13 @@ impl Config {
 
     fn validate(&mut self) -> Result<()> {
         // Validate database configuration
-        if self.database_config.host.is_empty() {
+        if self.config.database_config.host.is_empty() {
             return Err(anyhow!("Database host cannot be empty"));
         }
-        if self.database_config.username.is_empty() {
+        if self.config.database_config.username.is_empty() {
             return Err(anyhow!("Database username cannot be empty"));
         }
-        if self.database_config.database.is_empty() {
+        if self.config.database_config.database.is_empty() {
             return Err(anyhow!("Database name cannot be empty"));
         }
 
@@ -80,16 +117,16 @@ impl Config {
             return Err(anyhow!("No cleanup tasks defined in configuration"));
         }
 
-        if self.cron_schedule.is_empty() {
-            return Err(anyhow!("Cron schedule cannot be empty"));
-        } else if self.cron_schedule.split_whitespace().count() == 5 {
-            self.cron_schedule = ["*", &self.cron_schedule].join(" ");
-        }
-
-        for task in &self.cleanup_tasks {
+        for task in &mut self.cleanup_tasks {
             if task.name.is_empty() {
                 return Err(anyhow!("Task name cannot be empty"));
             }
+            if task.cron_schedule.is_empty() {
+                return Err(anyhow!("Cron schedule cannot be empty"));
+            } else if task.cron_schedule.split_whitespace().count() == 5 {
+                task.cron_schedule = ["*", &task.cron_schedule].join(" ");
+            }
+
             if task.template_query.is_empty() {
                 return Err(anyhow!(
                     "SQL template cannot be empty for task: {}",

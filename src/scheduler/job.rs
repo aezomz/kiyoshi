@@ -2,6 +2,7 @@ use std::{future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use log::info;
 
 type JobFunction =
     (dyn FnMut(JobScheduleMetadata) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync);
@@ -79,7 +80,7 @@ impl Job {
             data_interval_end: next,
         };
 
-        println!("{:?} firing: `{}`", now, self.name);
+        info!("{:?} firing: `{}`", now, self.name);
         self.last_run = Some(now);
 
         // Update the stored metadata for next run

@@ -1,4 +1,5 @@
 pub mod config;
-pub mod db;
+mod db;
+mod sql_validate;
 pub mod task;
-pub mod template;
+mod template;
