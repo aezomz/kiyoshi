@@ -52,7 +52,13 @@ pub async fn process_cleanup_tasks(
     info!("Processing cleanup task: {}", task.name);
 
     // Render SQL template
-    let sql = template_engine.render(&task.template_query, &task.parameters, &data_interval_end)?;
+    let mut template_parameters = task.parameters.clone();
+    template_parameters.insert("batch_size".to_string(), task.batch_size.to_string());
+    let sql = template_engine.render(
+        &task.template_query,
+        &template_parameters,
+        &data_interval_end,
+    )?;
 
     // Validate SQL query
     if config.safe_mode.enabled {
