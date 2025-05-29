@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use log::debug;
+use log::{debug, info, warn};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -172,7 +172,7 @@ pub fn substitute_env_vars(input: &str) -> String {
             debug!(
                 "Substituting environment variable: {}={}",
                 var_name,
-                if var_name.contains("password") {
+                if var_name.contains("password") || var_name.contains("bot_token") {
                     "[REDACTED]"
                 } else {
                     &value
@@ -184,4 +184,56 @@ pub fn substitute_env_vars(input: &str) -> String {
         }
     }
     result
+}
+
+pub fn load_env_from_file(env_file_path: &str) -> Result<()> {
+    let env_content = std::fs::read_to_string(env_file_path)
+        .with_context(|| format!("Failed to read env file '{}'", env_file_path))?;
+
+    let trimmed_content = env_content.trim();
+    if trimmed_content.is_empty() {
+        warn!(
+            "Environment file '{}' is empty, skipping environment variable loading",
+            env_file_path
+        );
+        return Ok(());
+    }
+
+    let env_vars: HashMap<String, serde_json::Value> = serde_json::from_str(trimmed_content)
+        .with_context(|| {
+            let preview = if trimmed_content.len() > 500 {
+                format!("{}...", &trimmed_content[..500])
+            } else {
+                trimmed_content.to_string()
+            };
+            format!(
+                "Failed to parse env file '{}' as JSON. File content (first 500 chars): {}",
+                env_file_path, preview
+            )
+        })?;
+
+    let count = env_vars.len();
+    for (key, value) in env_vars {
+        let string_value = match value {
+            serde_json::Value::String(s) => s,
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => String::new(),
+            _ => {
+                warn!(
+                    "Unsupported value type for environment variable '{}', converting to string representation",
+                    key
+                );
+                value.to_string()
+            }
+        };
+        std::env::set_var(key, string_value);
+    }
+
+    info!(
+        "Loaded {} environment variables from '{}'",
+        count, env_file_path
+    );
+
+    Ok(())
 }

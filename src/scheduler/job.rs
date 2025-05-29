@@ -40,14 +40,14 @@ impl Job {
     {
         let schedule = Schedule::from_str(schedule)?;
         let now = Utc::now();
-        let next = Self::get_next_schedule(&schedule, now);
+        let upcoming = Self::get_next_schedule(&schedule, now);
 
         Ok(Self {
             name: name.into(),
             schedule,
             function: Box::new(function),
             last_run: None,
-            schedule_metadata: JobScheduleMetadata::new(next),
+            schedule_metadata: JobScheduleMetadata::new(upcoming),
         })
     }
 
@@ -57,11 +57,13 @@ impl Job {
 
     #[must_use]
     pub fn until(&self) -> Option<Duration> {
-        if let Some(upcoming) = self
-            .schedule
-            .after(&self.last_run.unwrap_or_else(Utc::now))
-            .next()
-        {
+        let reference_time = if self.last_run.is_some() {
+            self.schedule_metadata.data_interval_end
+        } else {
+            Utc::now()
+        };
+
+        if let Some(upcoming) = self.schedule.after(&reference_time).next() {
             return if let Ok(duration_until) = upcoming.signed_duration_since(Utc::now()).to_std() {
                 Some(duration_until)
             } else {
@@ -73,11 +75,14 @@ impl Job {
 
     pub async fn run(&mut self) {
         let now = Utc::now();
-        let next =
-            Self::get_next_schedule(&self.schedule, self.schedule_metadata.data_interval_end);
+        // Use current scheduled time for this execution
+        let current_scheduled_time = self.schedule_metadata.data_interval_end;
+
+        // Calculate next scheduled time for future runs
+        let next = Self::get_next_schedule(&self.schedule, current_scheduled_time);
 
         let metadata = JobScheduleMetadata {
-            data_interval_end: next,
+            data_interval_end: current_scheduled_time,
         };
 
         info!("{:?} firing: `{}`", now, self.name);
@@ -90,6 +95,7 @@ impl Job {
         tokio::spawn(async move {
             fut.await;
         });
+        info!("completed: `{}`, next run will be at {}", self.name, next);
     }
     #[allow(dead_code)]
     pub fn get_schedule_metadata(&self) -> &JobScheduleMetadata {

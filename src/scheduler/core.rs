@@ -14,20 +14,20 @@ impl Scheduler {
 
     pub fn until(&mut self) -> Option<(Vec<&mut Job>, Duration)> {
         let mut next_jobs = Vec::new();
-        let mut min_duration = None;
+        let mut next_job_duration = None; // the time delta until the next run
         for job in &mut self.jobs {
             if let Some(duration) = job.until() {
-                let duration = duration.as_millis();
-                if min_duration.is_none() || duration < min_duration.unwrap() {
-                    min_duration = Some(duration);
+                let duration_millis = duration.as_millis();
+                if next_job_duration.is_none() || duration_millis < next_job_duration.unwrap() {
+                    next_job_duration = Some(duration_millis);
                     next_jobs.clear();
                     next_jobs.push(job);
-                } else if duration == min_duration.unwrap() {
+                } else if duration_millis == next_job_duration.unwrap() {
                     next_jobs.push(job);
                 }
             }
         }
-        if let Some(duration) = min_duration {
+        if let Some(duration) = next_job_duration {
             return Some((next_jobs, Duration::from_millis(duration as u64)));
         }
         None

@@ -87,6 +87,8 @@ pub async fn process_cleanup_tasks(
                             );
                         success = true;
                         let report = create_cleanup_report(CleanupMetadata {
+                            config,
+                            task,
                             total_rows,
                             elapsed_time: elapsed_in_secs,
                             schema_name: task
@@ -166,6 +168,8 @@ pub async fn process_cleanup_tasks(
 }
 
 struct CleanupMetadata<'a> {
+    config: &'a Config,
+    task: &'a CleanupTask,
     total_rows: u64,
     elapsed_time: f64,
     schema_name: Option<&'a String>,
@@ -173,17 +177,26 @@ struct CleanupMetadata<'a> {
 }
 
 fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
-    let schema_table_name = match (metadata.schema_name, metadata.table_name) {
+    let schema_table = match (metadata.schema_name, metadata.table_name) {
         (Some(schema), Some(table)) => format!("{}.{}", schema, table),
-        _ => String::new(),
+        (None, Some(table)) => table.clone(),
+        (Some(schema), None) => schema.clone(),
+        (None, None) => "Unknown Target".to_string(),
     };
+
     CreateMessage::Blocks(serde_json::json!([
         {
-            "type": "header",
+            "type": "section",
             "text": {
-                "type": "plain_text",
-                "text": format!("🧹 Cleanup Task Report for {}", schema_table_name),
-                "emoji": true
+                "type": "mrkdwn",
+                "text": "🧹 *Cleanup Task Completed*"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": format!("*Task:* `{}`\n*Target:* `{}`", metadata.task.name, schema_table)
             }
         },
         {
@@ -196,16 +209,23 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
                 {
                     "type": "mrkdwn",
                     "text": format!("*Total Time Elapsed:*\n{:.2}s", metadata.elapsed_time)
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": format!("*Host:*\n{}",
+                        &metadata.config.database_config.host
+                    )
                 }
             ]
-        }
-        ,
+        },
         {
             "type": "context",
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": format!("Executed at: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
+                    "text": format!("📅 Completed: {} | 🔧 Kiyoshi Cleanup Service",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                    )
                 }
             ]
         }
@@ -218,7 +238,7 @@ fn create_error_report(error: &str) -> CreateMessage {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": "❌ Cleanup Task Error",
+                "text": "❌ Cleanup Task Failed",
                 "emoji": true
             }
         },
@@ -226,7 +246,17 @@ fn create_error_report(error: &str) -> CreateMessage {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": format!("*Error Details:*\n```{}```", error)
+                "text": format!("*Error Details:*\n```\n{}\n```", error)
+            }
+        },
+        {
+            "type": "divider"
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "⚠️ *Action Required:* Please check the logs and investigate the issue."
             }
         },
         {
@@ -234,7 +264,9 @@ fn create_error_report(error: &str) -> CreateMessage {
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": format!("Error occurred at: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
+                    "text": format!("🚨 Failed: {} | 🔧 Kiyoshi Cleanup Service",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                    )
                 }
             ]
         }

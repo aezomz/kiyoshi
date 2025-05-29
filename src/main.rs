@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
 use cleaner::task;
-use log::{info, warn};
+use log::{error, info, warn};
 use scheduler::{core::Scheduler, job::Job};
 use tokio::signal;
 
@@ -30,20 +30,6 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
 
-    // Load environment variables from file
-    if let Some(env_file_path) = cli.env_file {
-        let env_content = std::fs::read_to_string(&env_file_path)
-            .unwrap_or_else(|_| panic!("Failed to read env file: {}", env_file_path));
-
-        let env_vars: std::collections::HashMap<String, String> =
-            serde_json::from_str(&env_content)
-                .unwrap_or_else(|_| panic!("Failed to parse env file as JSON: {}", env_file_path));
-
-        for (key, value) in env_vars {
-            std::env::set_var(key, value);
-        }
-    }
-
     // Initialize logging with optional verbose mode
     let log_level = if cli.verbose {
         log::LevelFilter::Debug
@@ -66,6 +52,13 @@ async fn main() -> Result<()> {
             )
         })
         .init();
+
+    if let Some(env_file_path) = cli.env_file {
+        if let Err(e) = cleaner::config::load_env_from_file(&env_file_path) {
+            error!("Failed to load environment file: {}", e);
+            return Err(e);
+        }
+    }
 
     // TODO: load from directory so we can run multiple config files
     // Load configuration from specified path
