@@ -196,6 +196,13 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
+                "text": format!("*Host:*\n{}", &metadata.config.database_config.host)
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
                 "text": format!("*Task:* `{}`\n*Target:* `{}`", metadata.task.name, schema_table)
             }
         },
@@ -209,12 +216,6 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
                 {
                     "type": "mrkdwn",
                     "text": format!("*Total Time Elapsed:*\n{:.2}s", metadata.elapsed_time)
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": format!("*Host:*\n{}",
-                        &metadata.config.database_config.host
-                    )
                 }
             ]
         },
@@ -223,7 +224,7 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": format!("📅 Completed: {} | 🔧 Kiyoshi Cleanup Service",
+                    "text": format!("📅 Completed: {} | 🫧 Kiyoshi Cleanup Service",
                         chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
                     )
                 }

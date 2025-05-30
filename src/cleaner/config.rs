@@ -124,7 +124,7 @@ impl FullConfig {
             if task.cron_schedule.is_empty() {
                 return Err(anyhow!("Cron schedule cannot be empty"));
             } else if task.cron_schedule.split_whitespace().count() == 5 {
-                task.cron_schedule = ["*", &task.cron_schedule].join(" ");
+                task.cron_schedule = ["0", &task.cron_schedule].join(" ");
             }
 
             if task.template_query.is_empty() {
