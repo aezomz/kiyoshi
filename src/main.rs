@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
                     let config = config_clone.clone();
                     let task = task_clone.clone();
                     Box::pin(async move {
-                        if let Err(e) = task::process_cleanup_tasks(&metadata, &config, &task).await
+                        if let Err(e) = task::process_cleanup_task(&metadata, &config, &task).await
                         {
                             warn!("Error running cleanup tasks: {}", e);
                         }

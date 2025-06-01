@@ -1,0 +1,52 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'kiyoshi'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=kiyoshi",
+                    "--package=kiyoshi"
+                ],
+                "filter": {
+                    "name": "kiyoshi",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+            "-c", "config/config.yaml",
+            "-e", "config/secrets.json",
+            "-v"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug test_sql_validate_date_sub",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=kiyoshi",
+                    "--package=kiyoshi"
+                ],
+                "filter": {
+                    "name": "kiyoshi",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "test_sql_validate_date_sub",
+                "--exact"
+            ],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

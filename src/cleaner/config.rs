@@ -172,7 +172,9 @@ pub fn substitute_env_vars(input: &str) -> String {
             debug!(
                 "Substituting environment variable: {}={}",
                 var_name,
-                if var_name.contains("password") || var_name.contains("bot_token") {
+                if var_name.to_lowercase().contains("password")
+                    || var_name.to_lowercase().contains("bot_token")
+                {
                     "[REDACTED]"
                 } else {
                     &value

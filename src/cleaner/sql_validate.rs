@@ -96,8 +96,8 @@ impl<'a> SqlValidator<'a> {
                 }
             }
             ast::Expr::Function(ast::Function { name, args, .. }) => {
-                if name.to_string().to_uppercase() == "DATE_SUB" {
-                    // Check function arguments here
+                let function_name = name.to_string().to_uppercase();
+                if function_name == "DATE_SUB" {
                     match args {
                         ast::FunctionArguments::List(arg_list) => arg_list.args.iter().any(|arg| {
                             matches!(
@@ -107,6 +107,21 @@ impl<'a> SqlValidator<'a> {
                                 )) if self.validate_interval(interval)
                             )
                         }),
+                        _ => false,
+                    }
+                } else if function_name == "DATE_FORMAT" {
+                    // Check if the first argument is a DATE_SUB function with valid interval
+                    match args {
+                        ast::FunctionArguments::List(arg_list) => {
+                            if let Some(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                                first_arg,
+                            ))) = arg_list.args.first()
+                            {
+                                self.contains_date_sub(first_arg)
+                            } else {
+                                false
+                            }
+                        }
                         _ => false,
                     }
                 } else {
@@ -168,7 +183,7 @@ mod tests {
     use crate::cleaner::template::TemplateEngine;
 
     #[test]
-    fn test_sql_query_ast() {
+    fn test_sql_validate_date_sub() {
         // Test cases with different template queries
         let test_cases = vec![
             (
@@ -181,15 +196,20 @@ mod tests {
                 "job_versions", 
                 "2024-03-20 00:00:00"
             ),
+            (
+                "DELETE FROM {{ table_name }} WHERE created_at < DATE_FORMAT(DATE_SUB('{{ data_interval_end }}', INTERVAL 250 DAY), '%Y-%m-%d 00:00:00') LIMIT {{ batch_size }};",
+                "data_contract_specs",
+                "2025-06-01 06:31:40"
+            ),
         ];
 
         for (template_query, table_name, data_interval_end) in test_cases {
             // Create template engine and render query
             let template_engine = TemplateEngine::new();
-            let parameters = std::collections::HashMap::from([(
-                "table_name".to_string(),
-                table_name.to_string(),
-            )]);
+            let parameters = std::collections::HashMap::from([
+                ("table_name".to_string(), table_name.to_string()),
+                ("batch_size".to_string(), "1000".to_string()),
+            ]);
 
             let sql = template_engine
                 .render(template_query, &parameters, data_interval_end)

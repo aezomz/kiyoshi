@@ -14,7 +14,7 @@ use crate::{
     scheduler::job::JobScheduleMetadata,
 };
 
-pub async fn process_cleanup_tasks(
+pub async fn process_cleanup_task(
     metadata: &JobScheduleMetadata,
     config: &Config,
     task: &CleanupTask,
@@ -63,9 +63,28 @@ pub async fn process_cleanup_tasks(
     // Validate SQL query
     if config.safe_mode.enabled {
         let validator = SqlValidator::new(config);
-        validator
-            .validate_sql_query(&sql)
-            .map_err(|e| anyhow::anyhow!("SQL validation failed for task {}: {}", task.name, e))?;
+        let validate_result = validator.validate_sql_query(&sql);
+        if let Err(e) = validate_result {
+            let error_report = create_error_report(&format!(
+                "SQL validation failed for task: {}, error: {}. If unexpected, please consider switching safe_mode.enabled to false otherwise the Kiyoshi might be lacking support in ensuring that the query is safe to run",
+                task.name, e
+            ));
+            if let Some(slack_client) = &slack_client {
+                let send_result = error_report
+                    .send_to_channel(slack_client, config.slack_config.channel_id.clone())
+                    .await;
+                if let Err(e) = send_result {
+                    warn!("Failed to send error report to Slack: {}", e);
+                } else {
+                    info!("Error report sent to Slack");
+                }
+            }
+            return Err(anyhow::anyhow!(
+                "SQL validation failed for task: {}, error: {}",
+                task.name,
+                e
+            ));
+        }
     }
 
     info!("Executing cleanup query for task: {}", task.name);
@@ -196,14 +215,7 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": format!("*Host:*\n{}", &metadata.config.database_config.host)
-            }
-        },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": format!("*Task:* `{}`\n*Target:* `{}`", metadata.task.name, schema_table)
+                "text": format!("*Host:* `{}`\n*Task:* `{}`\n*Target:* `{}`", metadata.config.database_config.host, metadata.task.name, schema_table)
             }
         },
         {
@@ -265,7 +277,7 @@ fn create_error_report(error: &str) -> CreateMessage {
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": format!("🚨 Failed: {} | 🔧 Kiyoshi Cleanup Service",
+                    "text": format!("🚨 Failed: {} | 🫧 Kiyoshi Cleanup Service",
                         chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
                     )
                 }
