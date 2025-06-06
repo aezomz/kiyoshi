@@ -65,7 +65,16 @@ pub async fn process_cleanup_task(
         let validator = SqlValidator::new(config);
         let validate_result = validator.validate_sql_query(&sql);
         if let Err(e) = validate_result {
-            let error_report = create_error_report(&format!(
+            let error_report = create_error_report(
+                &CleanupMetadata {
+                    config,
+                    task,
+                    total_rows: 0,
+                    elapsed_time: 0.0,
+                    schema_name: task.parameters.get("schema_name"),
+                    table_name: task.parameters.get("table_name"),
+                },
+                &format!(
                 "SQL validation failed for task: {}, error: {}. If unexpected, please consider switching safe_mode.enabled to false otherwise the Kiyoshi might be lacking support in ensuring that the query is safe to run",
                 task.name, e
             ));
@@ -93,6 +102,7 @@ pub async fn process_cleanup_task(
     let mut attempt = 0;
     let mut success = false;
     let mut total_rows: u64 = 0;
+    let mut total_time_elapsed: f64 = 0.0;
 
     'outer: while attempt < task.retry_attempts {
         loop {
@@ -109,7 +119,7 @@ pub async fn process_cleanup_task(
                             config,
                             task,
                             total_rows,
-                            elapsed_time: elapsed_in_secs,
+                            elapsed_time: total_time_elapsed,
                             schema_name: task
                                 .parameters
                                 .get("schema_name")
@@ -131,13 +141,13 @@ pub async fn process_cleanup_task(
                         }
                         break 'outer;
                     }
+                    total_time_elapsed += elapsed_in_secs;
                     total_rows += affected_rows;
                     info!(
                         "Successfully cleaned up {} rows (total: {}) for task: {} in {:.2}s",
                         affected_rows, total_rows, task.name, elapsed_in_secs
                     );
-                    tokio::time::sleep(Duration::from_secs(task.query_interval_seconds.into()))
-                        .await;
+                    tokio::time::sleep(Duration::from_secs_f64(task.query_interval_seconds)).await;
                 }
                 Err(e) => {
                     attempt += 1;
@@ -150,10 +160,20 @@ pub async fn process_cleanup_task(
                             .await;
                     }
                     if attempt == task.retry_attempts {
-                        let error_report = create_error_report(&format!(
-                            "All attempts failed for task: {}, error: {}",
-                            task.name, e
-                        ));
+                        let error_report = create_error_report(
+                            &CleanupMetadata {
+                                config,
+                                task,
+                                total_rows,
+                                elapsed_time: total_time_elapsed,
+                                schema_name: task
+                                    .parameters
+                                    .get("schema_name")
+                                    .or(Some(&config.database_config.database)),
+                                table_name: task.parameters.get("table_name"),
+                            },
+                            &format!("All attempts failed for task: {}, error: {}", task.name, e),
+                        );
                         if let Some(slack_client) = &slack_client {
                             let send_result = error_report
                                 .send_to_channel(
@@ -245,14 +265,26 @@ fn create_cleanup_report(metadata: CleanupMetadata) -> CreateMessage {
     ]))
 }
 
-fn create_error_report(error: &str) -> CreateMessage {
+fn create_error_report(metadata: &CleanupMetadata, error: &str) -> CreateMessage {
+    let schema_table = match (metadata.schema_name, metadata.table_name) {
+        (Some(schema), Some(table)) => format!("{}.{}", schema, table),
+        (None, Some(table)) => table.clone(),
+        (Some(schema), None) => schema.clone(),
+        (None, None) => "Unknown Target".to_string(),
+    };
     CreateMessage::Blocks(serde_json::json!([
         {
-            "type": "header",
+            "type": "section",
             "text": {
-                "type": "plain_text",
-                "text": "❌ Cleanup Task Failed",
-                "emoji": true
+                "type": "mrkdwn",
+                "text": "❌ *Cleanup Task Failed*"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": format!("*Host:* `{}`\n*Task:* `{}`\n*Target:* `{}`", metadata.config.database_config.host, metadata.task.name, schema_table)
             }
         },
         {

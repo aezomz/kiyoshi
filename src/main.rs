@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
             let config_clone = full_config.config.clone();
             let task_clone = task.clone();
             scheduler.add(
-                Job::new("cleanup_task", &task.cron_schedule, move |metadata| {
+                Job::new(task.name, &task.cron_schedule, move |metadata| {
                     let config = config_clone.clone();
                     let task = task_clone.clone();
                     Box::pin(async move {

@@ -18,7 +18,7 @@ test:
 fix:
 	cargo fix --allow-dirty --allow-staged
 
-all: check fmt lint test
+all: check fmt fmt-check lint test
 
 docker tag="latest":
 	docker build \

@@ -15,6 +15,7 @@ pub struct Job {
     schedule_metadata: JobScheduleMetadata,
 }
 
+#[derive(Clone, Copy)]
 pub struct JobScheduleMetadata {
     pub data_interval_end: DateTime<Utc>,
 }
@@ -57,13 +58,11 @@ impl Job {
 
     #[must_use]
     pub fn until(&self) -> Option<Duration> {
-        let reference_time = if self.last_run.is_some() {
-            self.schedule_metadata.data_interval_end
-        } else {
-            Utc::now()
-        };
-
-        if let Some(upcoming) = self.schedule.after(&reference_time).next() {
+        if let Some(upcoming) = self
+            .schedule
+            .after(&self.last_run.unwrap_or_else(Utc::now))
+            .next()
+        {
             return if let Ok(duration_until) = upcoming.signed_duration_since(Utc::now()).to_std() {
                 Some(duration_until)
             } else {
@@ -75,30 +74,82 @@ impl Job {
 
     pub async fn run(&mut self) {
         let now = Utc::now();
-        // Use current scheduled time for this execution
-        let current_scheduled_time = self.schedule_metadata.data_interval_end;
-
-        // Calculate next scheduled time for future runs
-        let next = Self::get_next_schedule(&self.schedule, current_scheduled_time);
-
-        let metadata = JobScheduleMetadata {
-            data_interval_end: current_scheduled_time,
-        };
-
-        info!("{:?} firing: `{}`", now, self.name);
+        info!("Task `{}` firing at {}", self.name, now);
         self.last_run = Some(now);
 
-        // Update the stored metadata for next run
-        self.schedule_metadata.update(next);
-
-        let fut = (self.function)(metadata);
+        let fut = (self.function)(self.schedule_metadata);
         tokio::spawn(async move {
             fut.await;
         });
-        info!("completed: `{}`, next run will be at {}", self.name, next);
+        let next =
+            Self::get_next_schedule(&self.schedule, self.schedule_metadata.data_interval_end);
+        self.schedule_metadata.update(next);
+        info!("Task `{}`, next run will be at {}", self.name, next);
     }
     #[allow(dead_code)]
     pub fn get_schedule_metadata(&self) -> &JobScheduleMetadata {
         &self.schedule_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use std::str::FromStr;
+
+    #[derive(Debug)]
+    struct GetNextScheduleTestCase {
+        name: &'static str,
+        cron_expression: &'static str,
+        now: DateTime<Utc>,
+        expected: DateTime<Utc>,
+    }
+
+    #[test]
+    fn test_get_next_schedule_parameterized() {
+        let test_cases = vec![
+            GetNextScheduleTestCase {
+                name: "daily at midnight",
+                cron_expression: "0 0 0 * * *",
+                now: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+                expected: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+            },
+            GetNextScheduleTestCase {
+                name: "hourly at minute 0",
+                cron_expression: "0 0 * * * *",
+                now: Utc.with_ymd_and_hms(2024, 1, 1, 12, 30, 0).unwrap(),
+                expected: Utc.with_ymd_and_hms(2024, 1, 1, 13, 0, 0).unwrap(),
+            },
+            GetNextScheduleTestCase {
+                name: "every minute",
+                cron_expression: "0 * * * * *",
+                now: Utc.with_ymd_and_hms(2024, 1, 1, 12, 30, 30).unwrap(),
+                expected: Utc.with_ymd_and_hms(2024, 1, 1, 12, 31, 0).unwrap(),
+            },
+            GetNextScheduleTestCase {
+                name: "every minute (exact round minute now)",
+                cron_expression: "0 * * * * *",
+                now: Utc.with_ymd_and_hms(2024, 1, 1, 12, 30, 0).unwrap(),
+                expected: Utc.with_ymd_and_hms(2024, 1, 1, 12, 31, 0).unwrap(),
+            },
+        ];
+
+        for test_case in test_cases {
+            let schedule = Schedule::from_str(test_case.cron_expression).unwrap_or_else(|_| {
+                panic!(
+                    "Failed to parse cron expression for test case: {}",
+                    test_case.name
+                )
+            });
+
+            let next = Job::get_next_schedule(&schedule, test_case.now);
+
+            assert_eq!(
+                next, test_case.expected,
+                "Schedule mismatch for test case: '{}' - expected {}, got {}",
+                test_case.name, test_case.expected, next
+            );
+        }
     }
 }

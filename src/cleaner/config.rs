@@ -73,7 +73,7 @@ pub struct CleanupTask {
     pub retry_attempts: u32,
     pub retry_delay_seconds: u32,
     #[serde(default)]
-    pub query_interval_seconds: u32,
+    pub query_interval_seconds: f64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
