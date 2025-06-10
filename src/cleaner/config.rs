@@ -74,6 +74,12 @@ pub struct CleanupTask {
     pub retry_delay_seconds: u32,
     #[serde(default)]
     pub query_interval_seconds: f64,
+    #[serde(default = "default_task_timeout_seconds")]
+    pub task_timeout_seconds: f64,
+}
+
+fn default_task_timeout_seconds() -> f64 {
+    3600.0 // Default 1 hour
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -142,6 +148,12 @@ impl FullConfig {
             if task.batch_size == 0 {
                 return Err(anyhow!(
                     "Batch size must be greater than 0 for task: {}",
+                    task.name
+                ));
+            }
+            if task.task_timeout_seconds <= 0.0 {
+                return Err(anyhow!(
+                    "Timeout seconds must be greater than 0 for task: {}",
                     task.name
                 ));
             }

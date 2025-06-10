@@ -40,6 +40,7 @@ Each cleanup task supports the following parameters:
 - `retry_attempts`: Number of retry attempts on failure
 - `retry_delay_seconds`: Delay between retries
 - `query_interval_seconds`: Delay between batches
+- `task_timeout_seconds`: Timeout for the task, default is 3600 seconds (1 hour). If the task takes longer than this, it will be stopped and a timeout report will be sent to Slack.
 
 ### Inherit Environment Variables in config file
 
